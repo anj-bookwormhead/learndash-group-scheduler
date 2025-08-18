@@ -1,31 +1,51 @@
 <?php
-
-
 final class pdalearning_LD_Group_Slots_4col {
-    const BOX_ID   = 'pdalearning_ld_group_schedule';
-    const NONCE_ID = 'pdalearning_ld_group_schedule_nonce';
-    const NONCE_K  = 'pdalearning_ld_group_schedule_save';
+    const BOX_ID        = 'pdalearning_ld_group_schedule';
+    const NONCE_ID      = 'pdalearning_ld_group_schedule_nonce';
+    const NONCE_K       = 'pdalearning_ld_group_schedule_save';
+
+    // NEW: constants for the Main Group Code box
+    const CODE_BOX_ID   = 'pdalearning_ld_group_code';
+    const CODE_META_KEY = '_ld_group_main_code';
+    const CODE_FIELD    = 'ld_group_main_code';
 
     public static function init() {
-        add_action('add_meta_boxes', [__CLASS__, 'add_box']);
-        add_action('save_post_groups', [__CLASS__, 'save'], 10, 1);
+        add_action('add_meta_boxes',        [__CLASS__, 'add_boxes']);
+        add_action('save_post_groups',      [__CLASS__, 'save'], 10, 1);
         add_action('admin_enqueue_scripts', [__CLASS__, 'enqueue']);
-        add_action('admin_head', [__CLASS__, 'admin_css']);
-        add_action('admin_footer', [__CLASS__, 'admin_js']);
+        add_action('admin_head',            [__CLASS__, 'admin_css']);
+        add_action('admin_footer',          [__CLASS__, 'admin_js']);
+
+        // OPTIONAL: show column in Groups list
+        add_filter('manage_groups_posts_columns',            [__CLASS__, 'add_admin_col']);
+        add_action('manage_groups_posts_custom_column',      [__CLASS__, 'fill_admin_col'], 10, 2);
     }
 
-    public static function add_box() {
+    /** Register BOTH meta boxes */
+    public static function add_boxes() {
+        // Assigned Schedule (wide / main column)
         add_meta_box(
             self::BOX_ID,
             __('Assigned Schedule', 'pdalearning'),
-            [__CLASS__, 'render_box'],
+            [__CLASS__, 'render_schedule_box'],
             'groups',
-            'normal', // main/wide column; draggable
+            'normal',
+            'high'
+        );
+
+        // Main Group Code (compact; put it in the side column – change to 'normal' if you want it wide)
+        add_meta_box(
+            self::CODE_BOX_ID,
+            __('Main Group Code', 'pdalearning'),
+            [__CLASS__, 'render_code_box'],
+            'groups',
+            'side',
             'high'
         );
     }
 
-    public static function render_box($post) {
+    /** Render: Assigned Schedule (your existing box) */
+    public static function render_schedule_box($post) {
         wp_nonce_field(self::NONCE_K, self::NONCE_ID);
 
         $slots = get_post_meta($post->ID, '_ld_group_slots', true);
@@ -97,11 +117,34 @@ final class pdalearning_LD_Group_Slots_4col {
         <?php
     }
 
+    /** NEW: Render the Main Group Code (single input) */
+    public static function render_code_box($post) {
+        // reuse the same nonce so 1 save covers both boxes
+        wp_nonce_field(self::NONCE_K, self::NONCE_ID);
+
+        $code = get_post_meta($post->ID, self::CODE_META_KEY, true);
+        ?>
+        <p>
+            <label for="<?php echo esc_attr(self::CODE_FIELD); ?>" class="screen-reader-text">
+                <?php esc_html_e('Main Group Code', 'pdalearning'); ?>
+            </label>
+            <input type="text"
+                   id="<?php echo esc_attr(self::CODE_FIELD); ?>"
+                   name="<?php echo esc_attr(self::CODE_FIELD); ?>"
+                   value="<?php echo esc_attr($code); ?>"
+                   class="widefat"
+                   placeholder="Enter the main group code">
+        </p>
+        <?php
+    }
+
+    /** Save BOTH meta boxes */
     public static function save($post_id) {
         if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
         if (!isset($_POST[self::NONCE_ID]) || !wp_verify_nonce($_POST[self::NONCE_ID], self::NONCE_K)) return;
         if (!current_user_can('edit_post', $post_id)) return;
 
+        // Save slots (existing)
         if (isset($_POST['ld_group_slots']) && is_array($_POST['ld_group_slots'])) {
             $clean = [];
             foreach ($_POST['ld_group_slots'] as $slot) {
@@ -116,8 +159,19 @@ final class pdalearning_LD_Group_Slots_4col {
         } else {
             delete_post_meta($post_id, '_ld_group_slots');
         }
+
+        // Save main group code (NEW)
+        if (isset($_POST[self::CODE_FIELD])) {
+            $code = sanitize_text_field(wp_unslash($_POST[self::CODE_FIELD]));
+            if ($code !== '') {
+                update_post_meta($post_id, self::CODE_META_KEY, $code);
+            } else {
+                delete_post_meta($post_id, self::CODE_META_KEY);
+            }
+        }
     }
 
+    /** Enqueue datepicker for the schedule box */
     public static function enqueue($hook) {
         $screen = get_current_screen();
         if (!$screen || $screen->post_type !== 'groups') return;
@@ -231,69 +285,17 @@ final class pdalearning_LD_Group_Slots_4col {
         </script>
         <?php
     }
+
+    /* ===== Admin list column for Main Group Code (optional) ===== */
+    public static function add_admin_col($cols){
+        $cols['pdalearning_main_code'] = __('Main Group Code', 'pdalearning');
+        return $cols;
+    }
+    public static function fill_admin_col($col, $post_id){
+        if ($col === 'pdalearning_main_code') {
+            $code = get_post_meta($post_id, self::CODE_META_KEY, true);
+            echo esc_html($code);
+        }
+    }
 }
 pdalearning_LD_Group_Slots_4col::init();
-
-
-
-
-
-/// Short code
-
-// ===== Shortcodes: Group Schedules =====
-
-// [ld_group_schedule id="123" show="date,venue,time,course" future_only="false" title_tag="h2"]
-add_shortcode('ld_group_schedule', function($atts){
-    $a = shortcode_atts([
-        'id'          => '',
-        'show'        => 'date,venue,time,course',  // comma list or 'date' etc.
-        'future_only' => 'false',
-        'title_tag'   => 'h2',
-    ], $atts, 'ld_group_schedule');
-
-    $group_id = absint($a['id']);
-    if (!$group_id) return '';
-
-    $show_fields = array_map('trim', explode(',', strtolower($a['show'])));
-    $future_only = filter_var($a['future_only'], FILTER_VALIDATE_BOOLEAN);
-    $title_tag   = preg_replace('/[^a-z0-9]/i','', $a['title_tag']); // sanitize tag
-    if ($title_tag === '') $title_tag = 'h2';
-
-    $slots = get_post_meta($group_id, '_ld_group_slots', true);
-    if (!is_array($slots) || empty($slots)) return '';
-
-    // Optionally filter to future dates (relies on strtotime parsable dates)
-    if ($future_only) {
-        $now = current_time('timestamp');
-        $slots = array_filter($slots, function($s) use ($now){
-            $t = isset($s['date']) ? strtotime($s['date']) : false;
-            return $t ? ($t >= $now) : true; // keep if unparsable
-        });
-        if (empty($slots)) return '';
-    }
-
-    // Build HTML
-    $out  = '<div class="a925-group-schedule">';
-    $out .= sprintf('<%1$s class="a925-group-title">%2$s</%1$s>', $title_tag, esc_html(get_the_title($group_id)));
-    $out .= '<ul class="a925-schedule-list">';
-
-    foreach ($slots as $s) {
-        $parts = [];
-        if (in_array('date', $show_fields, true)  && !empty($s['date']))   $parts[]  = esc_html($s['date']);
-        if (in_array('venue', $show_fields, true) && !empty($s['venue']))  $parts[]  = 'Venue: ' . esc_html($s['venue']);
-        if (in_array('time', $show_fields, true)  && !empty($s['time']))   $parts[]  = 'Time: '  . esc_html($s['time']);
-        if (in_array('course', $show_fields, true) && !empty($s['course'])){
-            $c_id = absint($s['course']);
-            $label = $c_id ? get_the_title($c_id) : $s['course'];
-            $url   = $c_id ? get_permalink($c_id) : '';
-            $parts[] = 'Course: ' . ($url ? '<a href="'.esc_url($url).'">'.esc_html($label).'</a>' : esc_html($label));
-        }
-        if (!empty($parts)) {
-            $out .= '<li>' . implode(' · ', $parts) . '</li>';
-        }
-    }
-    $out .= '</ul></div>';
-
-    return $out;
-});
-
